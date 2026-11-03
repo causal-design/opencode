@@ -1,10 +1,10 @@
 export * as Session from "./session.js"
 export * from "./session/schema.js"
 
-import { DateTime, Effect, Layer, Context, Option, Stream } from "effect"
+import { DateTime, Effect, Layer, Context, Option, Stream, Schema } from "effect"
 import { LLMClient } from "@opencode/ai/effect"
 import { ListAnchor, ListCursor, ListFilter } from "@opencode/schema/session"
-import { and, desc, eq } from "drizzle-orm"
+import { and, desc, eq, sql } from "drizzle-orm"
 import { Project } from "./project.js"
 import { Model } from "@opencode/schema/model"
 import { Location } from "./location.js"
@@ -15,7 +15,7 @@ import { Bus } from "./bus.js"
 import { Instance } from "./instance/service.js"
 import { Database } from "./database/database.js"
 import { SessionProjector } from "./session/projector.js"
-import { SessionMessageTable } from "./session/sql.js"
+import { SessionMessageTable, SessionInboxTable } from "./session/sql.js"
 import { SessionBlob } from "./session/blob.js"
 import { SessionSchema } from "./session/schema.js"
 import { RelativePath } from "./schema.js"
@@ -32,6 +32,7 @@ import {
   BusyError,
   CompactionConflictError,
   ForkEmptyError,
+  ForkConflictError,
   InboxConflictError,
   InvalidListCursorError,
   MessageDecodeError,
@@ -48,6 +49,7 @@ import { SessionInbox } from "./session/inbox.js"
 import { InstructionState } from "./session/instruction-state.js"
 import { SessionGenerate } from "./session/generate.js"
 import { SessionCommand } from "./session/command.js"
+import { SessionOperation } from "./session/operation.js"
 import {
   SessionMove,
   DestinationNotFoundError,
@@ -98,6 +100,7 @@ type CreateInput = CreateBaseInput &
 type CompactInput = Parameters<Session.Handle["compact"]>[0] & { sessionID: SessionSchema.ID }
 
 type ForkInput = {
+  id?: SessionSchema.ID
   sessionID: SessionSchema.ID
   before?: SessionMessage.ID
 }
@@ -107,6 +110,7 @@ export {
   BusyError,
   CompactionConflictError,
   ForkEmptyError,
+  ForkConflictError,
   InboxConflictError,
   InvalidListCursorError,
   MessageDecodeError,
@@ -122,6 +126,11 @@ export { DestinationNotFoundError, DestinationNotDirectoryError, DestinationUnav
 export { TurnRangeError }
 
 export interface Interface {
+  readonly operationOwner: (id: SessionMessage.ID) => Effect.Effect<{
+    sessionID: SessionSchema.ID
+    type: string
+    metadata?: Record<string, unknown>
+  } | undefined>
   /** A cursor carries the filters of the request that produced it, so filters passed with a cursor are ignored. */
   readonly list: (input?: ListFilter & { readonly limit?: number; readonly cursor?: ListCursor }) => Effect.Effect<
     {
@@ -133,7 +142,7 @@ export interface Interface {
   readonly create: (input: CreateInput) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly fork: (
     input: ForkInput,
-  ) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | ForkEmptyError>
+  ) => Effect.Effect<SessionSchema.Info, NotFoundError | MessageNotFoundError | ForkEmptyError | ForkConflictError>
   readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<SessionSchema.Info, NotFoundError>
   readonly environment: (input: {
     readonly sessionID: SessionSchema.ID
@@ -216,6 +225,8 @@ export interface Interface {
     prompt: string
   }) => Effect.Effect<string, NotFoundError | SessionGenerate.Error>
   readonly command: (input: {
+    id?: SessionMessage.ID
+    metadata?: Record<string, unknown>
     sessionID: SessionSchema.ID
     command: string
     text: string
@@ -225,7 +236,7 @@ export interface Interface {
     delivery?: SessionInbox.Delivery
   }) => Effect.Effect<
     void,
-    NotFoundError | Command.NotFoundError | Command.ExecutionError | FileSystem.DirectoryNotFoundError
+    NotFoundError | Command.NotFoundError | Command.ExecutionError | FileSystem.DirectoryNotFoundError | SessionOperation.Conflict
   >
   readonly shell: (
     input: Parameters<Session.Handle["shell"]>[0] & { sessionID: SessionSchema.ID },
@@ -338,6 +349,13 @@ const layer = Layer.effect(
       }),
       fork: Effect.fn("Session.fork")(function* (input) {
         const parent = yield* result.get(input.sessionID)
+        if (input.id) {
+          const existing = yield* store.get(input.id)
+          if (existing) {
+            if (existing.fork?.sessionID === input.sessionID && (!input.before || (existing.fork.boundary.type === "before" && existing.fork.boundary.messageID === input.before))) return existing
+            return yield* new ForkConflictError({ sessionID: input.sessionID, targetID: input.id })
+          }
+        }
         const boundary = yield* db
           .select({ id: SessionMessageTable.id })
           .from(SessionMessageTable)
@@ -357,7 +375,7 @@ const layer = Layer.effect(
             messageID: input.before,
           })
         if (!boundary) return yield* new ForkEmptyError({ sessionID: input.sessionID })
-        const sessionID = SessionSchema.ID.create()
+        const sessionID = input.id ?? SessionSchema.ID.create()
         const inherited = yield* db
           .transaction(() =>
             Effect.all({
@@ -378,7 +396,12 @@ const layer = Layer.effect(
             boundary: { type: input.before ? "before" : "through", messageID: boundary.id },
             ...inherited,
           })
-          .pipe(Effect.provideService(SessionBlob.ForkMedia, media))
+          .pipe(
+            Effect.provideService(SessionBlob.ForkMedia, media),
+            Effect.catchDefect(defect => store.get(sessionID).pipe(Effect.flatMap(existing =>
+              input.id && existing ? existing.fork?.sessionID === input.sessionID && (!input.before || (existing.fork.boundary.type === "before" && existing.fork.boundary.messageID === input.before)) ? Effect.void : Effect.fail(new ForkConflictError({ sessionID: input.sessionID, targetID: input.id })) : Effect.die(defect),
+            ))),
+          )
         return yield* result.get(sessionID).pipe(Effect.orDie)
       }),
       get: (sessionID) => sessions.forSession(sessionID).get(),
@@ -389,7 +412,7 @@ const layer = Layer.effect(
       }),
       view: (input) => sessions.forSession(input.sessionID).view(input),
       remove: Effect.fn("Session.remove")(function* (sessionID) {
-        yield* result.get(sessionID)
+        const saved = yield* result.get(sessionID)
         yield* execution.interrupt(sessionID)
         yield* execution.awaitIdle(sessionID)
         yield* jobs.cancelSession(sessionID)
@@ -397,8 +420,22 @@ const layer = Layer.effect(
         const children = yield* store.list({ parentID: sessionID })
         yield* Effect.forEach(children, (child) => result.remove(child.id), { concurrency: 1, discard: true })
         yield* environments.clear(sessionID)
-        yield* bus.publish(SessionEvent.Deleted, { sessionID })
+        yield* bus.publish(SessionEvent.Deleted, { sessionID }, { location: saved.location })
         yield* bus.remove(sessionID)
+      }),
+      operationOwner: Effect.fn("Session.operationOwner")(function* (id) {
+        // One SQLite snapshot spans both projections: promotion atomically
+        // moves an ID from inbox to history, so two separate reads could miss it.
+        const rows = yield* db.all<{ sessionID: SessionSchema.ID; type: string; metadata: string | null }>(sql`
+          SELECT session_id AS sessionID, type, json_extract(data, '$.metadata') AS metadata
+          FROM ${SessionMessageTable} WHERE id = ${id}
+          UNION ALL
+          SELECT session_id AS sessionID, type, json_extract(payload, '$.metadata') AS metadata
+          FROM ${SessionInboxTable} WHERE id = ${id}
+          LIMIT 1
+        `).pipe(Effect.orDie)
+        const saved = rows[0]
+        if (saved) return { sessionID: saved.sessionID, type: saved.type, metadata: saved.metadata === null ? undefined : Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Record(Schema.String, Schema.Unknown)))(saved.metadata) }
       }),
       list: Effect.fn("Session.list")(function* (input = {}) {
         const filter =
@@ -489,8 +526,12 @@ const layer = Layer.effect(
       }),
       command: Effect.fn("Session.command")(function* (input) {
         const session = yield* result.get(input.sessionID)
-        return yield* SessionCommand.execute({ ...input, session }).pipe(
+        const execute = SessionCommand.execute({ ...input, session })
+        const operation = input.id ? SessionOperation.run({ id: input.id, sessionID: session.id, kind: `command /${input.command}`, metadata: input.metadata }, execute) : execute
+        return yield* operation.pipe(
           Effect.provideService(Instance.Service, instances),
+          Effect.provideService(SessionStore.Service, store),
+          Effect.provideService(Bus.Service, bus),
         )
       }),
       shell: (input) => sessions.forSession(input.sessionID).shell(input),

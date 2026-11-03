@@ -7,14 +7,14 @@ import { Plugin } from "../plugin/service.js"
 import { Shell } from "../shell.js"
 import { ShellResult } from "../shell/result.js"
 
-export const start = Effect.fn("SessionShell.start")(function* (input: { session: Session.Info; command: string }) {
+export const start = Effect.fn("SessionShell.start")(function* (input: { session: Session.Info; command: string; metadata?: Record<string, unknown> }) {
   const instances = yield* Instance.Service
   const shell = yield* Plugin.awaitActivation.pipe(Effect.andThen(Shell.Service), instances.provide(input.session))
   const info = yield* shell.create({
     command: input.command,
     cwd: input.session.location.directory,
     timeout: 0,
-    metadata: { sessionID: input.session.id, background: true },
+    metadata: { ...input.metadata, sessionID: input.session.id, background: true },
   })
   // Keep completion tied to the original shell even if the Session moves.
   return {

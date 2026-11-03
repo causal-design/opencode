@@ -202,9 +202,10 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.fork",
         Effect.fn(function* (ctx) {
           return {
-            data: yield* session.fork({ sessionID: ctx.params.sessionID, before: ctx.payload.before }).pipe(
+            data: yield* session.fork({ sessionID: ctx.params.sessionID, before: ctx.payload.before, id: ctx.payload.id }).pipe(
               Effect.catchTag("Session.NotFoundError", missingSession),
               Effect.catchTag("Session.MessageNotFoundError", missingMessage),
+              Effect.catchTag("Session.ForkConflictError", error => new ConflictError({ message: "Fork ID belongs to another operation", resource: error.targetID })),
               Effect.catchTag(
                 "Session.ForkEmptyError",
                 (error) => new InvalidRequestError({ message: error.message, kind: "empty_session" }),
@@ -324,12 +325,20 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         }),
       )
       .handle(
+        "session.operationOwner",
+        Effect.fn(function* (ctx) {
+          return { data: (yield* session.operationOwner(ctx.params.id)) ?? null }
+        }),
+      )
+      .handle(
         "session.command",
         Effect.fn(function* (ctx) {
           yield* session
             .command({
               sessionID: ctx.params.sessionID,
               command: ctx.payload.name,
+              id: ctx.payload.id,
+              metadata: ctx.payload.metadata,
               text: ctx.payload.text,
               files: ctx.payload.files,
               agents: ctx.payload.agents,
@@ -338,6 +347,7 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
             })
             .pipe(
               Effect.catchTag("Session.NotFoundError", missingSession),
+              Effect.catchTag("SessionOperation.Conflict", error => new ConflictError({ message: error.message, resource: error.id })),
               Effect.catchTag("Command.NotFoundError", (error) =>
                 Effect.fail(
                   new CommandNotFoundError({
@@ -409,8 +419,11 @@ export const SessionHandler = HttpApiBuilder.group(Api, "server.session", (handl
         "session.shell",
         Effect.fn(function* (ctx) {
           yield* session
-            .shell({ sessionID: ctx.params.sessionID, id: ctx.payload.id, command: ctx.payload.command })
-            .pipe(Effect.catchTag("Session.NotFoundError", missingSession))
+            .shell({ sessionID: ctx.params.sessionID, id: ctx.payload.id, command: ctx.payload.command, metadata: ctx.payload.metadata })
+            .pipe(
+              Effect.catchTag("Session.NotFoundError", missingSession),
+              Effect.catchTag("SessionOperation.Conflict", error => new ConflictError({ message: error.message, resource: error.id })),
+            )
           return HttpApiSchema.NoContent.make()
         }),
       )
