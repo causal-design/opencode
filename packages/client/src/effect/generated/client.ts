@@ -1704,15 +1704,13 @@ const EndpointExperimentalJobList = (raw: RawClient["server.experimental"]) => (
   preserveEffect<ExperimentalJobListOutput>()(
     raw["job.list"]({
       query: {
+        location: input?.["location"],
         sessionID: input?.["sessionID"],
         kind: input?.["kind"],
         status: input?.["status"],
         descendants: input?.["descendants"],
       },
-    }).pipe(
-      Effect.mapError(mapClientError),
-      Effect.map((value) => value.data),
-    ),
+    }).pipe(Effect.mapError(mapClientError)),
   )
 
 const adaptGroupExperimental = (raw: RawClient["server.experimental"]) => ({

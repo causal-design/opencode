@@ -2494,12 +2494,16 @@ export type ExperimentalArtifactsDeleteOperation<E = never> = (
 ) => Effect.Effect<ExperimentalArtifactsDeleteOutput, E>
 
 export type ExperimentalJobListInput = {
+  readonly location?: { readonly directory?: string | undefined } | undefined
   readonly sessionID?: Session.ID | undefined
   readonly kind?: Job.Kind | undefined
   readonly status?: Job.Status | undefined
   readonly descendants?: boolean | undefined
 }
-export type ExperimentalJobListOutput = ReadonlyArray<Job.Info>
+export type ExperimentalJobListOutput = {
+  readonly location: Location.PublicRef
+  readonly data: ReadonlyArray<Job.Info>
+}
 export type ExperimentalJobListOperation<E = never> = (
   input?: ExperimentalJobListInput,
 ) => Effect.Effect<ExperimentalJobListOutput, E>
