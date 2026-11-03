@@ -23,6 +23,10 @@ export const State = Schema.Struct({
   /** The server process that armed the goal. */
   boot: Schema.String,
   updatedAt: Schema.Number,
+  /** Canonical provenance of the operation that armed this goal. */
+  metadata: optional(Schema.Record(Schema.String, Schema.Json)),
+  /** A resume starts a fresh continuation budget within the same goal. */
+  generation: optional(Schema.String),
 }).annotate({ identifier: "Goal.State" })
 
 /**

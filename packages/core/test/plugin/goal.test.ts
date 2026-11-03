@@ -18,6 +18,7 @@ import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
 import { SessionRunnerModel } from "@opencode/core/session/runner/model"
 import { Goal } from "@opencode/schema/goal"
+import { SessionMessage } from "@opencode/schema/session-message"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Global } from "@opencode/util/global"
 import { tempGlobalLayer } from "../fixture/global"
@@ -56,6 +57,23 @@ const it = testEffect(
 const model = Model.Ref.make({ id: Model.ID.make("goal"), providerID: Provider.ID.make("test") })
 
 describe("goal plugin", () => {
+  it.live("retains the initiating operation identity and marks generated continuation as automation", () =>
+    Effect.gen(function* () {
+      const session = yield* project()
+      const sessions = yield* Session.Service
+      const verdicts = reviewer('{"verdict":"continue","reason":"One test still fails."}', '{"verdict":"done","reason":"All tests pass."}')
+      yield* serve(verdicts.respond)
+      const input = { sessionID: session.id, id: SessionMessage.ID.make("msg_goal_attributed"), command: "goal", text: "Fix the test", metadata: { workspace: { sender: { id: "bob", kind: "human" }, submissionID: "msg_goal_attributed" } } }
+      yield* sessions.command(input)
+      yield* sessions.wait(session.id)
+      yield* sessions.command(input)
+      const messages = yield* sessions.messages({ sessionID: session.id, order: "asc" })
+      const notices = messages.filter(message => message.metadata?.source === "goal")
+      expect(notices).toHaveLength(2)
+      expect(notices[0]).toMatchObject({ id: input.id, metadata: input.metadata })
+      expect(notices[1]?.metadata?.workspace).toMatchObject({ sender: { kind: "automation" }, contributions: [input.metadata.workspace] })
+    }),
+  )
   it.live("keeps working in one execution until the reviewer finds the goal met", () =>
     Effect.gen(function* () {
       const session = yield* project()

@@ -5,6 +5,8 @@ import { define } from "@opencode/plugin/effect/plugin"
 import type { SessionIdleBackground } from "@opencode/plugin/effect/session"
 import { Goal } from "@opencode/schema/goal"
 import { Session } from "@opencode/schema/session"
+import { SessionMessage } from "@opencode/schema/session-message"
+import { SessionOperation } from "../session/operation.js"
 import { isExactRootFallback } from "@opencode/util/session-title-fallback"
 import { Cause, Clock, DateTime, Duration, Effect, FiberMap, Option, Schema, Stream } from "effect"
 import CONTINUATION from "./goal/continuation.txt"
@@ -197,8 +199,9 @@ export const Plugin = define({
       // No description: timelines hide the continuation, and the pinned goal shows that the loop is still running.
       yield* ctx.session.synthetic({
         sessionID,
+        id: SessionOperation.childID(SessionMessage.ID.make(goal.generation ?? goal.id), `goal-continuation-${next.rounds}`),
         text: continuation(next, [verdict.reason, verdict.next_step && `Next step: ${verdict.next_step}`]),
-        metadata: { source: "goal", goalID: next.id },
+        metadata: { ...SessionOperation.derivedMetadata(goal.metadata, "goal-continuation"), source: "goal", goalID: next.id },
       })
     })
 
@@ -349,6 +352,7 @@ export const Plugin = define({
             const text = unquote(input.prompt.text.trim())
             const control = text.toLowerCase()
             const goal = yield* read(input.sessionID)
+            const provenance = input.prompt.metadata === undefined ? undefined : yield* Schema.decodeUnknownEffect(Schema.Record(Schema.String, Schema.Json))(input.prompt.metadata)
             if (text === "") return yield* Effect.fail(new Error(goal ? `${describe(goal)}\n${USAGE}` : USAGE))
 
             if (control === "pause") {
@@ -363,7 +367,16 @@ export const Plugin = define({
             }
             if (control === "resume") {
               if (goal?.status !== "paused") return yield* Effect.fail(new Error("No paused goal to resume."))
+              const actor = Option.getOrUndefined(Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json))(provenance?.workspace))
+              const resumedMetadata = actor ? {
+                ...provenance, workspace: {
+                  ...actor,
+                  ...(actor.sender ? { controlActor: actor.sender } : {}),
+                  contributions: [...(goal.metadata?.workspace ? [goal.metadata.workspace] : []), actor],
+                },
+              } : provenance
               const resumed: State = {
+                ...goal,
                 id: goal.id,
                 objective: goal.objective,
                 status: "active",
@@ -372,12 +385,15 @@ export const Plugin = define({
                 maxRounds: goal.maxRounds,
                 boot: boot(),
                 updatedAt: yield* Clock.currentTimeMillis,
+                ...(resumedMetadata ? { metadata: resumedMetadata } : {}),
+                generation: input.prompt.id ?? crypto.randomUUID(),
               }
               yield* write(input.sessionID, resumed)
               return yield* ctx.session.synthetic({
                 sessionID: input.sessionID,
+                id: input.prompt.id,
                 text: continuation(resumed, ["The user resumed the goal."]),
-                metadata: { source: "goal", goalID: resumed.id },
+                metadata: { ...SessionOperation.derivedMetadata(resumed.metadata, "goal-resume"), source: "goal", goalID: resumed.id },
               })
             }
             if (control === "clear") {
@@ -390,13 +406,14 @@ export const Plugin = define({
                 new Error(`A goal objective is limited to ${MAX_OBJECTIVE} characters (got ${text.length}).`),
               )
             const created: State = {
-              id: crypto.randomUUID(),
+              id: input.prompt.id ?? crypto.randomUUID(),
               objective: text,
               status: "active",
               rounds: 0,
               maxRounds: MAX_ROUNDS,
               boot: boot(),
               updatedAt: yield* Clock.currentTimeMillis,
+              ...(provenance ? { metadata: provenance } : {}),
             }
             yield* write(input.sessionID, created)
             const session = yield* ctx.session.get({ sessionID: input.sessionID })
@@ -409,7 +426,7 @@ export const Plugin = define({
             )
               yield* ctx.session.update({ sessionID: input.sessionID, title: truncate(text, 60) })
             const kickoff = render(KICKOFF, { objective: escape(text) })
-            const metadata = { source: "goal", goalID: created.id }
+            const metadata = { ...input.prompt.metadata, source: "goal", goalID: created.id }
             const attached = [input.prompt.files, input.prompt.agents, input.prompt.skills].some(
               (items) => items !== undefined && items.length > 0,
             )
@@ -425,6 +442,7 @@ export const Plugin = define({
               })
             yield* ctx.session.synthetic({
               sessionID: input.sessionID,
+              id: input.prompt.id,
               text: kickoff,
               description: `Goal: ${truncate(text, 120)}`,
               metadata,

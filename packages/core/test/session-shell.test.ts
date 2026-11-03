@@ -8,6 +8,7 @@ import { Location } from "@opencode/core/location"
 import { LocationServiceMap } from "@opencode/core/location-service-map"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
+import { SessionMessage } from "@opencode/schema/session-message"
 import { SessionEvent } from "@opencode/core/session/event"
 import { SessionExecution } from "@opencode/core/session/execution"
 import { SessionRunCoordinator } from "@opencode/core/session/run-coordinator"
@@ -106,6 +107,18 @@ const launch = Effect.fn(function* (fixture: Effect.Success<typeof setup>, name:
 })
 
 describe("Session.shell", () => {
+  it.live("deduplicates concurrent shell retries before spawning and retains sender metadata", () =>
+    Effect.gen(function* () {
+      const fixture = yield* setup
+      const input = { sessionID: fixture.created.id, id: SessionMessage.ID.make("msg_shell_once"),
+        command: process.platform === "win32" ? "Add-Content calls.txt executed" : "printf 'executed\\n' >> calls.txt",
+        metadata: { workspace: { sender: { id: "bob", kind: "human" } } } }
+      yield* Effect.all([fixture.session.shell(input), fixture.session.shell(input)], { concurrency: 2 })
+      yield* fixture.session.shell(input)
+      expect((yield* Effect.promise(() => Bun.file(path.join(fixture.tmp.path, "calls.txt")).text())).trim().split("\n")).toHaveLength(1)
+      expect((yield* fixture.session.messages({ sessionID: fixture.created.id })).find(message => message.type === "shell")?.metadata).toMatchObject(input.metadata)
+    }),
+  )
   it.live("runs shells concurrently with an active model and waits for each shell's own completion", () =>
     Effect.gen(function* () {
       const fixture = yield* setup

@@ -589,6 +589,25 @@ describe("Session.create", () => {
     }),
   )
 
+  it.effect("reconciles stable fork targets concurrently without repeating the fork event", () =>
+    Effect.gen(function* () {
+      const session = yield* Session.Service
+      const bus = yield* Bus.Service
+      const { db } = yield* Database.Service
+      const parent = yield* session.create({ location, title: "Stable fork" })
+      yield* session.prompt({ sessionID: parent.id, text: "First", resume: false })
+      yield* SessionInbox.promote(db, bus, parent.id, "steer")
+      const id = Session.ID.create()
+      const forks = yield* Effect.all([session.fork({ sessionID: parent.id, id }), session.fork({ sessionID: parent.id, id })], { concurrency: 2 })
+      expect(forks.map(fork => fork.id)).toEqual([id, id])
+      expect((yield* session.fork({ sessionID: parent.id, id })).id).toBe(id)
+      expect(Array.from(yield* Stream.runCollect(logEvents(session, id)))).toHaveLength(1)
+      expect(yield* session.context(id)).toMatchObject([Expected.user("First")])
+      const other = yield* session.create({ location })
+      expect((yield* session.fork({ sessionID: parent.id, id: other.id }).pipe(Effect.flip))._tag).toBe("Session.ForkConflictError")
+    }),
+  )
+
   it.effect("forks a session by replaying a durable fork event into copied projected rows", () =>
     Effect.gen(function* () {
       const session = yield* Session.Service

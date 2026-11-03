@@ -4,6 +4,7 @@ import { Command } from "@opencode/schema/command"
 import type { PromptInput } from "@opencode/schema/prompt-input"
 import type { Session } from "@opencode/schema/session"
 import type { SessionInbox } from "@opencode/schema/session-inbox"
+import type { SessionMessage } from "@opencode/schema/session-message"
 import { makeLocationNode } from "@opencode/util/effect/app-node"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Bus } from "./bus.js"
@@ -15,7 +16,7 @@ export { Event } from "@opencode/schema/command"
 
 export interface Invocation {
   readonly sessionID: Session.ID
-  readonly prompt: PromptInput.Prompt
+  readonly prompt: PromptInput.Prompt & { id?: SessionMessage.ID; metadata?: Record<string, unknown> }
   readonly delivery: SessionInbox.Delivery
 }
 

@@ -123,6 +123,20 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S, FormI ext
 ) =>
   HttpApiGroup.make("server.session")
     .add(
+      HttpApiEndpoint.get("session.operationOwner", "/api/experimental/session-operation/:id", {
+        params: { id: SessionMessage.ID },
+        success: Schema.Struct({ data: Schema.NullOr(Schema.Struct({
+          sessionID: Session.ID,
+          type: Schema.String,
+          metadata: Schema.Record(Schema.String, Schema.Unknown).pipe(Schema.optional),
+        })) }),
+      }).annotateMerge(OpenApi.annotations({
+        identifier: "experimental.sessionOperation.get",
+        summary: "Resolve durable operation owner",
+        description: "Experimental: read the owner of an existing inbox/history ID without returning message content. May change without compatibility guarantees.",
+      })),
+    )
+    .add(
       HttpApiEndpoint.get("session.list", "/api/session", {
         query: SessionsQuery,
         success: Schema.Struct({
@@ -257,9 +271,9 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S, FormI ext
     .add(
       HttpApiEndpoint.post("session.fork", "/api/session/:sessionID/fork", {
         params: { sessionID: Session.ID },
-        payload: Schema.Struct({ before: SessionMessage.ID.pipe(Schema.optional) }),
+        payload: Schema.Struct({ before: SessionMessage.ID.pipe(Schema.optional), id: Session.ID.pipe(Schema.optional) }),
         success: Schema.Struct({ data: PublicSessionInfo }),
-        error: [SessionNotFoundError, MessageNotFoundError, InvalidRequestError],
+        error: [SessionNotFoundError, MessageNotFoundError, InvalidRequestError, ConflictError],
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "session.fork",
@@ -359,12 +373,14 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S, FormI ext
       HttpApiEndpoint.post("session.command", "/api/session/:sessionID/command", {
         params: { sessionID: Session.ID },
         payload: Schema.Struct({
+          id: SessionMessage.ID.pipe(Schema.optional),
+          metadata: SessionInbox.UserPayload.fields.metadata,
           name: Schema.String,
           ...PromptInput.Prompt.fields,
           delivery: SessionInbox.Delivery.pipe(Schema.optional),
         }),
         success: HttpApiSchema.NoContent,
-        error: [SessionNotFoundError, CommandNotFoundError, CommandExecutionError],
+        error: [SessionNotFoundError, CommandNotFoundError, CommandExecutionError, ConflictError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(
@@ -422,10 +438,11 @@ export const makeSessionGroup = <I extends HttpApiMiddleware.AnyId, S, FormI ext
         params: { sessionID: Session.ID },
         payload: Schema.Struct({
           id: SessionMessage.ID.pipe(Schema.optional),
+          metadata: SessionInbox.UserPayload.fields.metadata,
           command: Schema.String,
         }),
         success: HttpApiSchema.NoContent,
-        error: SessionNotFoundError,
+        error: [SessionNotFoundError, ConflictError],
       })
         .middleware(sessionLocationMiddleware)
         .annotateMerge(

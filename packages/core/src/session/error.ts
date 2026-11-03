@@ -42,6 +42,11 @@ export class MessageDecodeError extends Schema.TaggedError<MessageDecodeError>()
   }
 }
 
+export class ForkConflictError extends Schema.TaggedError<ForkConflictError>()("Session.ForkConflictError", {
+  sessionID: SessionSchema.ID,
+  targetID: SessionSchema.ID,
+}) {}
+
 export class AgentNotFoundError extends Schema.TaggedError<AgentNotFoundError>()("Session.AgentNotFoundError", {
   sessionID: SessionSchema.ID,
   agent: Agent.ID,

@@ -7,6 +7,7 @@ import { Effect } from "effect"
 import { Command } from "../command.js"
 import { Instance } from "../instance/service.js"
 import { Plugin } from "../plugin/service.js"
+import { SessionMessage } from "./message.js"
 
 export const execute = Effect.fn("SessionCommand.execute")(function* (input: {
   session: Session.Info
@@ -16,16 +17,21 @@ export const execute = Effect.fn("SessionCommand.execute")(function* (input: {
   agents?: PromptInput.Prompt["agents"]
   skills?: PromptInput.Prompt["skills"]
   delivery?: SessionInbox.Delivery
+  id?: SessionMessage.ID
+  metadata?: Record<string, unknown>
 }) {
   const instances = yield* Instance.Service
   yield* Effect.gen(function* () {
     yield* Plugin.awaitActivation
     const commands = yield* Command.Service
-    yield* commands.execute({
+    const id = input.id ?? SessionMessage.ID.create()
+    const execute = commands.execute({
       name: input.command,
       invocation: {
         sessionID: input.session.id,
         prompt: {
+          id,
+          metadata: input.metadata,
           text: input.text,
           files: input.files,
           agents: input.agents,
@@ -34,5 +40,6 @@ export const execute = Effect.fn("SessionCommand.execute")(function* (input: {
         delivery: input.delivery ?? "steer",
       },
     })
+    yield* execute
   }).pipe(instances.provide(input.session))
 })

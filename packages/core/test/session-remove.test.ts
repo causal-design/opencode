@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Layer, RcMap, Scope } from "effect"
+import { Effect, Fiber, Layer, RcMap, Scope, Stream } from "effect"
 import { AppNodeBuilder } from "@opencode/core/effect/app-node-builder"
 import { LayerNode } from "@opencode/util/effect/layer-node"
 import { Database } from "@opencode/core/database/database"
@@ -9,6 +9,7 @@ import { Location } from "@opencode/core/location"
 import { Project } from "@opencode/core/project"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Session } from "@opencode/core/session"
+import { SessionEvent } from "@opencode/core/session/event"
 import { SessionExecution } from "@opencode/core/session/execution"
 import { SessionModelTransport } from "@opencode/core/session/model-transport"
 import { SessionProjector } from "@opencode/core/session/projector"
@@ -69,6 +70,11 @@ describe("Session.remove", () => {
       const locations = yield* LocationServiceMap.Service
       yield* Effect.acquireRelease(locations.contextEffect(location), () => locations.invalidate(location))
       closed.length = 0
+      const bus = yield* Bus.Service
+      const deleted = yield* bus.subscribe([SessionEvent.Deleted]).pipe(
+        Stream.take(2), Stream.runCollect, Effect.forkScoped,
+      )
+      yield* Effect.yieldNow
 
       yield* session.remove(parent.id)
 
@@ -79,6 +85,11 @@ describe("Session.remove", () => {
       expect(yield* environments.get(child.id)).toBeUndefined()
       expect(yield* Effect.result(session.get(parent.id))).toMatchObject({ _tag: "Failure" })
       expect(yield* Effect.result(session.get(child.id))).toMatchObject({ _tag: "Failure" })
+      // Consume the actual publication after both live records are gone: scope
+      // belongs to the stock envelope, not a custom deletion payload field.
+      const events = yield* Fiber.join(deleted)
+      expect(events.map((event) => event.location)).toEqual([location, location])
+      expect(events.map((event) => event.data)).toEqual([{ sessionID: child.id }, { sessionID: parent.id }])
     }),
   )
 

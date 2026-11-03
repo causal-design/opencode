@@ -28,6 +28,7 @@ import { SessionRevert } from "./revert.js"
 import { SessionShell } from "./shell.js"
 import { SessionSkill } from "./skill.js"
 import { SessionSchema } from "./schema.js"
+import { SessionOperation } from "./operation.js"
 import { SessionStore } from "./store.js"
 
 type PromptRequest = SessionPrompt.Input & {
@@ -191,12 +192,13 @@ export const make = Effect.fn("Session.make")(function* () {
   )
   const shell = Effect.fn("Session.shell")(function* (
     sessionID: SessionSchema.ID,
-    input: { id?: SessionMessage.ID; command: string },
+    input: { id?: SessionMessage.ID; command: string; metadata?: Record<string, unknown> },
   ) {
     const session = yield* get(sessionID)
-    // The server owns completion recording even if the submitting client disconnects.
-    const running = yield* Effect.gen(function* () {
-      const started = yield* SessionShell.start({ session, command: input.command }).pipe(
+    // A stable invocation is reconciled before spawning. The host still owns
+    // completion after the submitting client disconnects.
+    const execute = Effect.gen(function* () {
+      const started = yield* SessionShell.start({ session, command: input.command, metadata: input.metadata }).pipe(
         Effect.provideService(Instance.Service, instances),
         Effect.tapError((error) =>
           synthetic(sessionID, {
@@ -214,7 +216,7 @@ export const make = Effect.fn("Session.make")(function* () {
           sessionID,
           shell: started.info,
         },
-        { id: input.id ? Event.ID.make(input.id.replace(/^msg_/, "evt_")) : undefined },
+        { id: input.id ? Event.ID.make(input.id.replace(/^msg_/, "evt_")) : undefined, metadata: input.metadata },
       )
       const terminal = yield* started.result
       const preview = yield* started.output
@@ -225,12 +227,20 @@ export const make = Effect.fn("Session.make")(function* () {
       })
       yield* synthetic(sessionID, {
         ...ShellResult.userNotification(terminal),
+        ...(input.id ? { id: SessionOperation.childID(input.id, "shell-result") } : {}),
+        metadata: { ...ShellResult.userNotification(terminal).metadata, ...SessionOperation.derivedMetadata(input.metadata, "shell-result") },
         resume: false,
       }).pipe(
         Effect.catchTag("Session.NotFoundError", () => Effect.void),
         Effect.orDie,
       )
-    }).pipe(Effect.forkIn(scope, { startImmediately: true }))
+    })
+    const guarded = input.id ? SessionOperation.run({ id: input.id, sessionID, kind: "shell", metadata: input.metadata }, execute) : execute
+    const running = yield* guarded.pipe(
+      Effect.provideService(SessionStore.Service, store),
+      Effect.provideService(Bus.Service, bus),
+      Effect.forkIn(scope, { startImmediately: true }),
+    )
     yield* Fiber.join(running)
   })
   const skill = Effect.fn("Session.skill")(function* (
