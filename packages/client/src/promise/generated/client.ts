@@ -1685,12 +1685,11 @@ export function make(options: ClientOptions) {
       },
       job: {
         list: (input?: ExperimentalJobListInput, requestOptions?: RequestOptions) =>
-          request<ExperimentalJobListOutput>(
+          request<{ readonly data: ExperimentalJobListOutput }>(
             {
               method: "GET",
               path: `/api/experimental/job`,
               query: {
-                location: input?.["location"],
                 sessionID: input?.["sessionID"],
                 kind: input?.["kind"],
                 status: input?.["status"],
@@ -1701,7 +1700,7 @@ export function make(options: ClientOptions) {
               empty: false,
             },
             requestOptions,
-          ),
+          ).then((value) => value.data),
       },
       migration: {
         v1: {

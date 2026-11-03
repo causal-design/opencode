@@ -14001,34 +14001,6 @@
         "operationId": "experimental.job.list",
         "parameters": [
           {
-            "name": "location",
-            "in": "query",
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "directory": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "additionalProperties": false
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "required": false
-          },
-          {
             "name": "sessionID",
             "in": "query",
             "schema": {
@@ -14040,7 +14012,7 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter to background jobs owned by this session. Without an explicit location, the session's location is used."
+              "description": "Filter to background jobs owned by this session."
             },
             "required": false
           },
@@ -14103,9 +14075,6 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "location": {
-                      "$ref": "#/components/schemas/Location.PublicRef"
-                    },
                     "data": {
                       "type": "array",
                       "items": {
@@ -14113,7 +14082,7 @@
                       }
                     }
                   },
-                  "required": ["location", "data"],
+                  "required": ["data"],
                   "additionalProperties": false
                 }
               }
@@ -14150,7 +14119,7 @@
             }
           }
         },
-        "description": "List active and unconsumed background jobs owned by sessions in a location, optionally filtered by owning session, descendants, kind, or status. Experimental: may change without compatibility guarantees.",
+        "description": "List active and unconsumed background jobs, optionally filtered by owning session, descendants, or kind. Experimental: may change without compatibility guarantees.",
         "summary": "List background jobs"
       }
     },

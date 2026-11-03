@@ -5,18 +5,11 @@ import { Effect } from "effect"
 import type { Job } from "../job.js"
 import type { SessionSchema } from "./schema.js"
 
-export type LookupSession = {
-  readonly parentID?: SessionSchema.ID
-  readonly location: { readonly directory: string }
-}
-
 export type Lookup = {
-  readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<LookupSession | undefined>
+  readonly get: (sessionID: SessionSchema.ID) => Effect.Effect<{ readonly parentID?: SessionSchema.ID } | undefined>
 }
 
 export type ListFilter = {
-  /** Keep only jobs whose owning session is in this location directory. */
-  readonly directory?: string
   readonly sessionID?: SessionSchema.ID
   readonly kind?: Kind
   readonly status?: Status
@@ -33,9 +26,9 @@ export const outstanding = Effect.fnUntraced(function* (
   store: Lookup,
   sessionID: SessionSchema.ID,
 ) {
-  const sessions = memoize(store)
+  const parents = new Map<SessionSchema.ID, SessionSchema.ID | null>()
   const owned = yield* Effect.filter(yield* jobs.runningBackground, (recovery) =>
-    descends(sessions, recovery.kind === "subagent" ? recovery.parentSessionID : recovery.sessionID, sessionID),
+    descends(store, parents, recovery.kind === "subagent" ? recovery.parentSessionID : recovery.sessionID, sessionID),
   )
   return owned.map((recovery) => {
     if (recovery.kind === "shell")
@@ -57,47 +50,43 @@ export const outstanding = Effect.fnUntraced(function* (
   })
 })
 
-/** Active and unconsumed background jobs matching the requested location, Session, kind, status, and descendant scope. */
+/** Active and unconsumed background jobs matching the requested Session, kind, status, and descendant scope. */
 export const list = Effect.fn("SessionBackground.list")(function* (
   jobs: Pick<Job.Interface, "backgroundJobs">,
   store: Lookup,
   filter: ListFilter = {},
 ) {
-  const sessions = memoize(store)
-  const sessionID = filter.sessionID
-  return yield* Effect.filter(
-    yield* jobs.backgroundJobs,
-    Effect.fnUntraced(function* (item) {
-      if (filter.kind !== undefined && item.kind !== filter.kind) return false
-      if (filter.status !== undefined && item.status !== filter.status) return false
-      if (sessionID !== undefined) {
-        if (!filter.descendants && item.sessionID !== sessionID) return false
-        if (filter.descendants && !(yield* descends(sessions, item.sessionID, sessionID))) return false
-      }
-      if (filter.directory === undefined) return true
-      return (yield* sessions.get(item.sessionID))?.location.directory === filter.directory
-    }),
+  const items = (yield* jobs.backgroundJobs).filter(
+    (item) =>
+      (filter.kind === undefined || item.kind === filter.kind) &&
+      (filter.status === undefined || item.status === filter.status),
   )
+  if (filter.sessionID === undefined) return items
+  const sessionID = filter.sessionID
+  if (!filter.descendants) return items.filter((item) => item.sessionID === sessionID)
+  const parents = new Map<SessionSchema.ID, SessionSchema.ID | null>()
+  return yield* Effect.filter(items, (item) => descends(store, parents, item.sessionID, sessionID))
 })
 
-/** Caches session lookups for the duration of one walk over the job registry. */
-function memoize(store: Lookup): Lookup {
-  const cache = new Map<SessionSchema.ID, LookupSession | undefined>()
-  return {
-    get: (sessionID) =>
-      cache.has(sessionID)
-        ? Effect.succeed(cache.get(sessionID))
-        : store.get(sessionID).pipe(Effect.tap((session) => Effect.sync(() => cache.set(sessionID, session)))),
-  }
-}
-
-const descends = Effect.fnUntraced(function* (store: Lookup, from: SessionSchema.ID, ancestor: SessionSchema.ID) {
+const descends = Effect.fnUntraced(function* (
+  store: Lookup,
+  parents: Map<SessionSchema.ID, SessionSchema.ID | null>,
+  from: SessionSchema.ID,
+  ancestor: SessionSchema.ID,
+) {
   const seen = new Set<SessionSchema.ID>()
   let current: SessionSchema.ID | undefined = from
   while (current !== undefined && !seen.has(current)) {
     if (current === ancestor) return true
     seen.add(current)
-    current = (yield* store.get(current))?.parentID
+    const cached = parents.get(current)
+    if (cached !== undefined) {
+      current = cached ?? undefined
+      continue
+    }
+    const parentID = (yield* store.get(current))?.parentID
+    parents.set(current, parentID ?? null)
+    current = parentID
   }
   return false
 })

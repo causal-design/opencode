@@ -36,7 +36,7 @@ export const PersistentPtyHandler = HttpApiBuilder.group(Api, "server.experiment
 
     return handlers
       .handleRaw("media.get", (ctx) => mediaGet(ctx.params.hash, ctx.request))
-      .handle("job.list", (ctx) => job.list(ctx.query, ctx.request))
+      .handle("job.list", (ctx) => job.list(ctx.query))
       .handle("artifacts.providers", (ctx) => artifact.providers(ctx.query, ctx.request))
       .handle("artifacts.list", (ctx) => artifact.list(ctx.query, ctx.request))
       .handle("artifacts.create", (ctx) => artifact.create(ctx.query, ctx.payload, ctx.request))

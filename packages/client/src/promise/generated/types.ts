@@ -4684,14 +4684,13 @@ export type ExperimentalArtifactsViewInput = {
 export type ExperimentalArtifactsViewOutput = globalThis.Uint8Array
 
 export type ExperimentalJobListInput = {
-  readonly location?: { readonly directory?: string | undefined } | undefined
   readonly sessionID?: string | undefined
   readonly kind?: ("shell" | "subagent" | "image") | undefined
   readonly status?: ("running" | "completed" | "error" | "cancelled") | undefined
   readonly descendants?: boolean | undefined
 }
 
-export type ExperimentalJobListOutput = { location: LocationPublicRef; data: Array<JobInfo> }
+export type ExperimentalJobListOutput = { data: Array<JobInfo> }["data"]
 
 export type ShellListInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
 

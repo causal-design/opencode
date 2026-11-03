@@ -1,10 +1,8 @@
 import { Job } from "@opencode/schema/job"
-import { Location } from "@opencode/schema/location"
 import { Session } from "@opencode/schema/session"
 import { Schema, SchemaGetter } from "effect"
 import { HttpApiEndpoint, OpenApi } from "effect/http-api"
 import { InvalidRequestError, SessionNotFoundError } from "../errors.js"
-import { LocationQuery, locationQueryOpenApi } from "./location.js"
 
 const BooleanFromString = Schema.Literals(["true", "false"]).pipe(
   Schema.decodeTo(Schema.Boolean, {
@@ -14,10 +12,8 @@ const BooleanFromString = Schema.Literals(["true", "false"]).pipe(
 )
 
 export const ListQuery = Schema.Struct({
-  ...LocationQuery.fields,
   sessionID: Schema.optional(Session.ID).annotate({
-    description:
-      "Filter to background jobs owned by this session. Without an explicit location, the session's location is used.",
+    description: "Filter to background jobs owned by this session.",
   }),
   kind: Schema.optional(Job.Kind).annotate({
     description: "Filter by background job kind (shell, subagent, or image).",
@@ -35,17 +31,15 @@ export type ListQuery = typeof ListQuery.Type
 export const JobEndpoints = [
   HttpApiEndpoint.get("job.list", "/api/experimental/job", {
     query: ListQuery,
-    success: Location.response(Schema.Array(Job.Info)),
+    success: Schema.Struct({ data: Schema.Array(Job.Info) }),
     error: [InvalidRequestError, SessionNotFoundError],
-  })
-    .annotateMerge(locationQueryOpenApi)
-    .annotateMerge(
-      OpenApi.annotations({
-        identifier: "experimental.job.list",
-        summary: "List background jobs",
-        description:
-          "List active and unconsumed background jobs owned by sessions in a location, optionally filtered by owning session, descendants, kind, or status. Experimental: may change without compatibility guarantees.",
-        transform: (operation) => ({ ...operation, tags: ["experimental"] }),
-      }),
-    ),
+  }).annotateMerge(
+    OpenApi.annotations({
+      identifier: "experimental.job.list",
+      summary: "List background jobs",
+      description:
+        "List active and unconsumed background jobs, optionally filtered by owning session, descendants, or kind. Experimental: may change without compatibility guarantees.",
+      transform: (operation) => ({ ...operation, tags: ["experimental"] }),
+    }),
+  ),
 ] as const
